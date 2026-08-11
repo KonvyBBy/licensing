@@ -1,7 +1,9 @@
 """HTTP client for the LicenseServer backend."""
 
+import ssl
 from dataclasses import dataclass
 from typing import Optional
+from urllib.parse import urlparse
 
 import httpx
 
@@ -43,11 +45,32 @@ class LicenseClient:
         app_id: str,
         app_secret: str,
         timeout: float = 10.0,
+        pinned_ca: Optional[str] = None,
     ) -> None:
+        """LicenseClient for the LicenseServer backend.
+
+        ``base_url`` is the HTTPS endpoint of your server. Plain ``http://`` is
+        refused unless the host is localhost (dev/testing only).
+
+        ``pinned_ca`` optionally points at a PEM bundle containing the
+        certificate(s) you trust. When set, the client will ONLY trust a server
+        presenting a certificate chaining to that bundle — a MITM or spoofed
+        server is rejected even if it has a valid public CA cert. This is the
+        defense against an attacker re-pointing your app at a fake server.
+        """
+        scheme = urlparse(base_url).scheme.lower()
+        host = urlparse(base_url).hostname or ""
+        if scheme != "https" and host not in ("localhost", "127.0.0.1", "::1"):
+            raise ValueError("base_url must use https (http is only allowed for localhost)")
+        if pinned_ca:
+            ctx = ssl.create_default_context(cafile=pinned_ca)
+            ctx.verify_mode = ssl.CERT_REQUIRED
+        else:
+            ctx = ssl.create_default_context()
         self._base = base_url.rstrip("/")
         self._app_id = app_id
         self._app_secret = app_secret
-        self._client = httpx.Client(base_url=self._base, timeout=timeout)
+        self._client = httpx.Client(base_url=self._base, timeout=timeout, verify=ctx)
 
     # ------------------------------------------------------------- helpers
     def _raise(self, resp: httpx.Response) -> None:
