@@ -32,4 +32,4 @@ services:
 
 databases:
   - name: license-server-db
-    plan: starter
+    plan: basic-256mb
