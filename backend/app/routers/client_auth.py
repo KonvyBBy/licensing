@@ -42,6 +42,17 @@ def _session_expiry(license_expiry: datetime | None, now: datetime) -> datetime:
     return candidate
 
 
+_LIFETIME_DISPLAY_SECS = 86400 * 365 * 10  # 10 years → shows as LIFETIME client-side
+
+
+def _license_expires_in(lic: License, now: datetime) -> int:
+    """The actual license remaining time in seconds (not the session cap)."""
+    lic_expiry = ensure_aware(lic.expires_at) if lic.expires_at else None
+    if lic_expiry is None:
+        return _LIFETIME_DISPLAY_SECS
+    return max(0, int((lic_expiry - now).total_seconds()))
+
+
 async def _active_session_count(db: AsyncSession, license_id: str) -> int:
     return await db.scalar(
         select(func.count())
@@ -154,7 +165,7 @@ async def activate(
     await db.commit()
     return AuthSuccess(
         session_token=token,
-        expires_in=int((expiry - now).total_seconds()),
+        expires_in=_license_expires_in(lic, now),
         expires_at=expiry,
     )
 
@@ -220,7 +231,7 @@ async def verify(
     await db.commit()
     return VerifySuccess(
         session_token=new_token_value,
-        expires_in=int((new_expiry - now).total_seconds()),
+        expires_in=_license_expires_in(lic, now),
         expires_at=new_expiry,
         app_id=app.client_id,
         license_key=lic.key,
