@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import settings
 from ..database import ensure_aware, get_db
+from ..duration import expiry_from_duration
 from ..models import Application, DeviceSession, License
 from ..rate_limit import rate_limit
 from ..schemas import (
@@ -129,6 +130,11 @@ async def activate(
 
     # Bind HWID on first activation.
     lic.hwid_hash = new_hwid_hash
+
+    # Countdown starts on first use: stamp the expiry only now, so the license
+    # does not rot while sitting unused on a seller's shelf.
+    if lic.expires_at is None and lic.validity_value and lic.validity_value > 0:
+        lic.expires_at = expiry_from_duration(lic.validity_value, lic.validity_unit, now)
 
     token = new_token(32)
     expiry = _session_expiry(lic.expires_at, now)

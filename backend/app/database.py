@@ -56,8 +56,31 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
         yield session
 
 
+def _add_missing_columns(sync_conn) -> None:
+    """Add new columns to tables created by an older deploy (create_all won't)."""
+    dialect = sync_conn.dialect.name
+    if dialect == "sqlite":
+        cols = {row[1] for row in sync_conn.exec_driver_sql("PRAGMA table_info(licenses)")}
+        if "validity_value" not in cols:
+            sync_conn.exec_driver_sql(
+                "ALTER TABLE licenses ADD COLUMN validity_value INTEGER NOT NULL DEFAULT 0"
+            )
+        if "validity_unit" not in cols:
+            sync_conn.exec_driver_sql(
+                "ALTER TABLE licenses ADD COLUMN validity_unit VARCHAR(16) NOT NULL DEFAULT ''"
+            )
+    else:
+        sync_conn.exec_driver_sql(
+            "ALTER TABLE licenses ADD COLUMN IF NOT EXISTS validity_value INTEGER NOT NULL DEFAULT 0"
+        )
+        sync_conn.exec_driver_sql(
+            "ALTER TABLE licenses ADD COLUMN IF NOT EXISTS validity_unit VARCHAR(16) NOT NULL DEFAULT ''"
+        )
+
+
 async def init_db() -> None:
     from . import models  # noqa: F401  (register tables)
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(_add_missing_columns)

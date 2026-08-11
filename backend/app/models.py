@@ -52,7 +52,12 @@ class License(Base):
     status: Mapped[str] = mapped_column(String(16), default="active")  # active | revoked | banned | expired
     # HMAC-SHA256(hwid) with the server secret. Raw device id is never stored.
     hwid_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
-    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)  # null = lifetime
+    # Validity of the key. expires_at stays NULL until first activation, so the
+    # countdown starts on first use. ("" / 0 = lifetime.)
+    validity_unit: Mapped[str] = mapped_column(String(16), default="")
+    validity_value: Mapped[int] = mapped_column(Integer, default=0)
+    # NULL = lifetime, OR (until first use) the countdown has not started yet.
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     max_activations: Mapped[int] = mapped_column(Integer, default=1)
     banned_reason: Mapped[str] = mapped_column(Text, default="")
     created_by: Mapped[str] = mapped_column(

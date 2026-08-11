@@ -159,44 +159,38 @@ async def test_list_licenses(client, auth_headers, app_with_secret, license_key)
 
 
 async def test_generate_duration_units(client, auth_headers, app_with_secret):
-    from datetime import datetime, timedelta, timezone
-
     cases = [
-        {"duration": 90, "unit": "minutes"},
-        {"duration": 6, "unit": "hours"},
-        {"duration": 14, "unit": "weeks"},
-        {"duration": 3, "unit": "months"},
-        {"duration": 2, "unit": "years"},
-        {"duration": 0, "unit": "lifetime"},
+        (90, "minutes", "minutes"),
+        (6, "hours", "hours"),
+        (14, "weeks", "weeks"),
+        (3, "months", "months"),
+        (2, "years", "years"),
+        (0, "lifetime", ""),
     ]
-    for payload in cases:
+    for value, unit, expected_unit in cases:
         r = await client.post(
             f"/api/v1/admin/licenses/for/{app_with_secret['id']}",
-            json={**payload, "count": 1, "max_activations": 1},
+            json={"duration": value, "unit": unit, "count": 1, "max_activations": 1},
             headers=auth_headers,
         )
-        assert r.status_code == 201, (payload, r.text)
+        assert r.status_code == 201, (unit, r.text)
         lic = r.json()[0]
-        if payload["unit"] == "lifetime":
-            assert lic["expires_at"] is None
-        else:
-            assert lic["expires_at"] is not None
-            exp = datetime.fromisoformat(lic["expires_at"].replace("Z", "+00:00"))
-            if exp.tzinfo is None:
-                exp = exp.replace(tzinfo=timezone.utc)
-            assert exp > datetime.now(timezone.utc)
+        # Countdown must NOT start at generation: expires_at is stamped on first use.
+        assert lic["expires_at"] is None, (unit, lic)
+        assert lic["validity_unit"] == expected_unit, (unit, lic)
+        assert lic["validity_value"] == value, (unit, lic)
 
-    # legacy `days` still works
+    # legacy `days` still works and is stored as a day-based validity
     r = await client.post(
         f"/api/v1/admin/licenses/for/{app_with_secret['id']}",
         json={"days": 30, "count": 1, "max_activations": 1},
         headers=auth_headers,
     )
     assert r.status_code == 201, r.text
-    exp = datetime.fromisoformat(r.json()[0]["expires_at"].replace("Z", "+00:00"))
-    if exp.tzinfo is None:
-        exp = exp.replace(tzinfo=timezone.utc)
-    assert exp > datetime.now(timezone.utc)
+    lic = r.json()[0]
+    assert lic["expires_at"] is None
+    assert lic["validity_unit"] == "days"
+    assert lic["validity_value"] == 30
 
 
 async def test_generate_duration_requires_positive(client, auth_headers, app_with_secret):
@@ -206,6 +200,62 @@ async def test_generate_duration_requires_positive(client, auth_headers, app_wit
         headers=auth_headers,
     )
     assert r.status_code == 400
+
+
+async def test_expiry_starts_on_first_activation(client, auth_headers, app_with_secret, app_creds):
+    from datetime import datetime, timezone
+
+    # A timed license has no expiry at generation...
+    r = await client.post(
+        f"/api/v1/admin/licenses/for/{app_with_secret['id']}",
+        json={"duration": 30, "unit": "days", "count": 1, "max_activations": 1},
+        headers=auth_headers,
+    )
+    assert r.status_code == 201, r.text
+    lic = r.json()[0]
+    assert lic["expires_at"] is None
+    assert lic["validity_unit"] == "days"
+    assert lic["validity_value"] == 30
+
+    # ...and gets its expiry stamped on first activation.
+    hwid = "first-use-machine-1"
+    r = await client.post(
+        "/api/v1/auth/activate",
+        json={"app_id": app_creds["app_id"], "app_secret": app_creds["app_secret"], "key": lic["key"], "hwid": hwid},
+    )
+    assert r.status_code == 200, r.text
+
+    r = await client.get(
+        f"/api/v1/admin/licenses/key/{lic['key']}",
+        headers=auth_headers,
+    )
+    assert r.status_code == 200, r.text
+    lic = r.json()
+    assert lic["expires_at"] is not None
+    exp = datetime.fromisoformat(lic["expires_at"].replace("Z", "+00:00"))
+    if exp.tzinfo is None:
+        exp = exp.replace(tzinfo=timezone.utc)
+    assert exp > datetime.now(timezone.utc)
+
+
+async def test_lifetime_key_never_stamps_expiry(client, auth_headers, app_with_secret, app_creds):
+    r = await client.post(
+        f"/api/v1/admin/licenses/for/{app_with_secret['id']}",
+        json={"duration": 0, "unit": "lifetime", "count": 1, "max_activations": 1},
+        headers=auth_headers,
+    )
+    assert r.status_code == 201, r.text
+    key = r.json()[0]["key"]
+
+    r = await client.post(
+        "/api/v1/auth/activate",
+        json={"app_id": app_creds["app_id"], "app_secret": app_creds["app_secret"], "key": key, "hwid": "lifetime-machine-1"},
+    )
+    assert r.status_code == 200, r.text
+
+    r = await client.get(f"/api/v1/admin/licenses/key/{key}", headers=auth_headers)
+    assert r.status_code == 200
+    assert r.json()["expires_at"] is None
 
 
 # ------------------------------------------------------------------ client auth flow

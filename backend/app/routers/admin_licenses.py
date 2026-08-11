@@ -1,11 +1,10 @@
-from datetime import datetime, timedelta, timezone
-
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
 from ..deps import current_admin
+from ..duration import validity_from_duration
 from ..models import AdminUser, Application, DeviceSession, License
 from ..rate_limit import rate_limit
 from ..schemas import LicenseBan, LicenseBulkCreate, LicenseCreate, LicenseOut, LicenseRevoke
@@ -18,40 +17,6 @@ def _client_ip(request: Request) -> str:
     return request.client.host if request.client else ""
 
 
-def _add_calendar_months(dt: datetime, months: int) -> datetime:
-    """Add whole calendar months, clamping the day to the target month's end."""
-    idx = dt.month - 1 + months
-    year = dt.year + idx // 12
-    month = idx % 12 + 1
-    leap = year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
-    days_in_month = [31, 29 if leap else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1]
-    return dt.replace(year=year, month=month, day=min(dt.day, days_in_month))
-
-
-def _compute_expiry(payload: LicenseBulkCreate, now: datetime) -> datetime | None:
-    """Return the expiry (or None for lifetime) for a license-create payload."""
-    unit = payload.unit
-    if unit == "lifetime":
-        return None
-    if unit:
-        if payload.duration <= 0:
-            raise HTTPException(400, "duration must be greater than 0")
-        if unit == "minutes":
-            return now + timedelta(minutes=payload.duration)
-        if unit == "hours":
-            return now + timedelta(hours=payload.duration)
-        if unit == "days":
-            return now + timedelta(days=payload.duration)
-        if unit == "weeks":
-            return now + timedelta(weeks=payload.duration)
-        if unit == "months":
-            return _add_calendar_months(now, payload.duration)
-        if unit == "years":
-            return _add_calendar_months(now, payload.duration * 12)
-    # Legacy `days` path (0 = lifetime).
-    return now + timedelta(days=payload.days) if payload.days and payload.days > 0 else None
-
-
 def _license_out(lic: License) -> LicenseOut:
     return LicenseOut(
         id=lic.id,
@@ -59,6 +24,8 @@ def _license_out(lic: License) -> LicenseOut:
         app_id=lic.app_id,
         status=lic.status,
         expires_at=lic.expires_at,
+        validity_unit=lic.validity_unit,
+        validity_value=lic.validity_value,
         hwid_bound=bool(lic.hwid_hash),
         max_activations=lic.max_activations,
         banned_reason=lic.banned_reason,
@@ -85,8 +52,12 @@ async def generate_for_app(
         raise HTTPException(429, "Too many requests")
     await _app_for_admin(db, admin, app_id)
 
-    now = datetime.now(timezone.utc)
-    expiry = _compute_expiry(payload, now)
+    try:
+        validity_value, validity_unit = validity_from_duration(
+            payload.days, payload.duration, payload.unit
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
     created = []
     seen = set()
@@ -102,7 +73,10 @@ async def generate_for_app(
             key=key,
             app_id=app_id,
             status="active",
-            expires_at=expiry,
+            # Countdown starts on first activation; no expiry is stamped yet.
+            expires_at=None,
+            validity_value=validity_value,
+            validity_unit=validity_unit,
             max_activations=payload.max_activations,
             created_by=admin.id,
         )
@@ -114,8 +88,9 @@ async def generate_for_app(
         target=app_id, ip=_client_ip(request),
         details={
             "count": len(created),
-            "unit": payload.unit or ("days" if payload.days else "lifetime"),
-            "duration": payload.duration or payload.days or 0,
+            "unit": validity_unit or "lifetime",
+            "duration": validity_value,
+            "start_on_first_use": True,
             "max_activations": payload.max_activations,
         },
     )

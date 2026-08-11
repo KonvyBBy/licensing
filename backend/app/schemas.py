@@ -113,6 +113,8 @@ class LicenseOut(BaseModel):
     app_id: str
     status: str
     expires_at: Optional[datetime]
+    validity_unit: str
+    validity_value: int
     hwid_bound: bool
     max_activations: int
     banned_reason: str

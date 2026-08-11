@@ -34,6 +34,13 @@ function fmtDate(d) {
   return isNaN(dt) ? String(d) : dt.toLocaleString();
 }
 
+function fmtExpiry(l) {
+  // Timed key with no expiry stamped yet: the countdown starts on first use.
+  if (!l.expires_at && l.validity_value && l.validity_unit)
+    return "On first use";
+  return fmtDate(l.expires_at);
+}
+
 function fmtKey(k) {
   return k ? k.replace(/-(?!\w{5}$)/g, "&#8209;") : "";
 }
@@ -389,7 +396,7 @@ async function loadLicenses() {
         <tr>
           <td><code class="mono">${fmtKey(esc(l.key))}</code> <button class="icon ghost small" title="Copy" onclick="copyText('${esc(l.key)}')"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 012-2h10"/></svg></button></td>
           <td><span class="badge ${esc(l.status)}">${esc(l.status)}</span>${l.banned_reason ? `<div class="tiny" style="color:var(--red);max-width:160px">${esc(l.banned_reason)}</div>` : ""}</td>
-          <td>${esc(fmtDate(l.expires_at))}</td>
+          <td>${esc(fmtExpiry(l))}</td>
           <td>${l.hwid_bound ? `<span class="badge bound">bound</span>` : `<span class="badge disabled">free</span>`}</td>
           <td>
             <button class="small ghost" onclick="openSessions('${esc(l.key)}')">Sessions</button>
@@ -416,7 +423,7 @@ async function generateLicenses() {
       method: "POST",
       body: JSON.stringify({ duration, unit, count, max_activations: maxAct }),
     });
-    toast(`Generated ${created.length} key${created.length > 1 ? "s" : ""} (${unit === "lifetime" ? "lifetime" : duration + " " + unit}).`, "ok");
+    toast(`Generated ${created.length} key${created.length > 1 ? "s" : ""} (${unit === "lifetime" ? "lifetime" : duration + " " + unit}). Countdown starts on first activation.`, "ok");
     created.forEach((l) => copyKeyQueued(l.key));
     loadLicenses();
   } catch (e) { toast(e.message, "error"); }
@@ -820,6 +827,7 @@ RULES
   - Keys: XXXXX-XXXXX-XXXXX-XXXXX-XXXXX (uppercase)
   - hwid: any stable string >= 8 chars; server hashes it, never stores raw
   - First activation binds the HWID; a second device gets 403
+  - The validity countdown starts on FIRST activation, not on generation
   - session_token rotates on every verify: always store the returned one
   - app_secret lives only in YOUR app; it can be extracted by reversers but
     grants no ability to mint or validate licenses
@@ -986,6 +994,7 @@ async function renderSettings() {
         <dt>Key rotation</dt><dd>Session tokens rotate on every verification</dd>
         <dt>HWID binding</dt><dd>First device wins; stored hashed, never raw</dd>
         <dt>Activation limit</dt><dd>Configurable per key at generation</dd>
+        <dt>Expiry</dt><dd>Countdown starts on first activation, not on generation</dd>
       </div>
     </div>`;
 }
