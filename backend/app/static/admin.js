@@ -6,6 +6,22 @@ let appsCache = [];
 
 const $ = (id) => document.getElementById(id);
 
+function saveTokens(a, r) {
+  access = a;
+  refresh = r;
+  if (a && r) {
+    localStorage.setItem("ls_access", a);
+    localStorage.setItem("ls_refresh", r);
+  }
+}
+
+function clearTokens() {
+  access = null;
+  refresh = null;
+  localStorage.removeItem("ls_access");
+  localStorage.removeItem("ls_refresh");
+}
+
 function esc(s) {
   return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => (
     { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
@@ -110,10 +126,9 @@ async function tryRefresh() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ refresh_token: refresh }),
     });
-    if (!r.ok) { access = null; refresh = null; showLogin(); return false; }
+    if (!r.ok) { clearTokens(); showLogin(); return false; }
     const d = await r.json();
-    access = d.access_token;
-    refresh = d.refresh_token;
+    saveTokens(d.access_token, d.refresh_token);
     return true;
   } catch (e) { return false; }
 }
@@ -136,8 +151,7 @@ async function doLogin() {
   btn.disabled = true; btn.textContent = "Signing in…";
   try {
     const d = await api("/admin/login", { method: "POST", body: JSON.stringify({ email, password }) });
-    access = d.access_token;
-    refresh = d.refresh_token;
+    saveTokens(d.access_token, d.refresh_token);
     $("loginView").classList.add("hidden");
     $("appView").classList.remove("hidden");
     bootstrap();
@@ -150,9 +164,21 @@ async function doLogin() {
 
 $("logout-btn").addEventListener("click", async () => {
   try { if (refresh) await fetch(API + "/admin/logout", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ refresh_token: refresh }) }); } catch (e) {}
-  access = null; refresh = null;
+  clearTokens();
   showLogin();
 });
+
+// Restore a persisted session on page load so refreshes don't re-login.
+(function init() {
+  const a = localStorage.getItem("ls_access");
+  const r = localStorage.getItem("ls_refresh");
+  if (a && r) {
+    saveTokens(a, r);
+    $("loginView").classList.add("hidden");
+    $("appView").classList.remove("hidden");
+    bootstrap();
+  }
+})();
 
 // ---------------------------------------------------------------- navigation
 const TITLES = {
@@ -812,6 +838,6 @@ async function changePassword() {
   try {
     await api("/admin/change-password", { method: "POST", body: JSON.stringify({ current_password: cur, new_password: n1 }) });
     toast("Password updated. Sign in again.", "ok");
-    setTimeout(() => { access = null; refresh = null; showLogin(); }, 900);
+    setTimeout(() => { clearTokens(); showLogin(); }, 900);
   } catch (e) { toast(e.message, "error"); }
 }
