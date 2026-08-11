@@ -1,7 +1,7 @@
 # Render blueprint — deploy this backend as a Web Service.
 #   1. Create a Postgres (or Neon) database and set DATABASE_URL.
 #   2. Set SECRET_KEY (32+ chars) and a strong ADMIN_PASSWORD.
-#   3. Deploy from the backend/ directory.
+#   3. rootDir: backend — the service builds/start commands run from backend/.
 
 services:
   - type: web
