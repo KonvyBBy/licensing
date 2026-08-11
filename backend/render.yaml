@@ -1,0 +1,35 @@
+# Render blueprint — deploy this backend as a Web Service.
+#   1. Create a Postgres (or Neon) database and set DATABASE_URL.
+#   2. Set SECRET_KEY (32+ chars) and a strong ADMIN_PASSWORD.
+#   3. Deploy from the backend/ directory.
+
+services:
+  - type: web
+    name: license-server
+    runtime: python
+    plan: starter
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /healthz
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DATABASE_URL
+        fromDatabase:
+          name: license-server-db
+          property: connectionString
+      - key: ADMIN_EMAIL
+        value: change-me@example.com
+      - key: ADMIN_PASSWORD
+        sync: false   # set this manually in the dashboard before first deploy
+      - key: COOKIE_SECURE
+        value: "true"
+      - key: ALLOWED_ORIGINS
+        value: "https://license-server.onrender.com"
+
+databases:
+  - name: license-server-db
+    plan: starter
