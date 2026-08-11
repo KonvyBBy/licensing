@@ -312,10 +312,23 @@ async function renderLicenses() {
   $("view-licenses").innerHTML = `
     <div class="card">
       <div class="card-title">Generate licenses</div>
-      <div class="card-sub">Create fresh keys for a product. 0 days = lifetime.</div>
+      <div class="card-sub">Create fresh keys for a product. Choose any duration down to minutes.</div>
       <div class="row grow">
         <div><label>Application</label><select id="lic-app" style="width:100%">${options}</select></div>
-        <div><label>Validity</label><select id="lic-days" style="width:100%"><option value="30">30 days</option><option value="90">90 days</option><option value="365">1 year</option><option value="0">Lifetime</option></select></div>
+        <div><label>Duration</label>
+          <div class="row" style="flex-wrap:nowrap">
+            <input id="lic-dur" type="number" value="30" min="1" style="width:100px;flex:none" />
+            <select id="lic-unit" style="flex:1">
+              <option value="minutes">Minutes</option>
+              <option value="hours">Hours</option>
+              <option value="days" selected>Days</option>
+              <option value="weeks">Weeks</option>
+              <option value="months">Months</option>
+              <option value="years">Years</option>
+              <option value="lifetime">Lifetime</option>
+            </select>
+          </div>
+        </div>
         <div><label>Count</label><input id="lic-count" type="number" value="1" min="1" max="100" style="width:100%" /></div>
         <div><label>Devices / key</label><input id="lic-max" type="number" value="1" min="1" max="100" style="width:100%" /></div>
       </div>
@@ -367,12 +380,17 @@ async function loadLicenses() {
 async function generateLicenses() {
   const appId = $("lic-app").value;
   if (!appId) { toast("Create an application first.", "error"); return; }
-  const days = parseInt($("lic-days").value, 10);
+  const unit = $("lic-unit").value;
+  const duration = unit === "lifetime" ? 0 : (parseInt($("lic-dur").value, 10) || 0);
   const count = parseInt($("lic-count").value, 10) || 1;
   const maxAct = parseInt($("lic-max").value, 10) || 1;
+  if (!duration && unit !== "lifetime") { toast("Enter a duration greater than 0.", "error"); return; }
   try {
-    const created = await api("/admin/licenses/for/" + appId, { method: "POST", body: JSON.stringify({ days, count, max_activations: maxAct }) });
-    toast(`Generated ${created.length} key${created.length > 1 ? "s" : ""}.`, "ok");
+    const created = await api("/admin/licenses/for/" + appId, {
+      method: "POST",
+      body: JSON.stringify({ duration, unit, count, max_activations: maxAct }),
+    });
+    toast(`Generated ${created.length} key${created.length > 1 ? "s" : ""} (${unit === "lifetime" ? "lifetime" : duration + " " + unit}).`, "ok");
     created.forEach((l) => copyKeyQueued(l.key));
     loadLicenses();
   } catch (e) { toast(e.message, "error"); }

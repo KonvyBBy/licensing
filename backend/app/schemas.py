@@ -84,8 +84,23 @@ class AppRegenerateSecret(BaseModel):
 
 # ---------------------------------------------------------------- licenses
 class LicenseCreate(BaseModel):
-    days: int = Field(default=30, ge=0)  # 0 = lifetime
+    # Legacy field: validity in days (0 = lifetime). Still supported for
+    # backward compatibility; prefer `duration` + `unit` for finer control.
+    days: int = Field(default=0, ge=0, le=100000)
+    # Validity as a quantity + unit. When `unit` is set it takes precedence
+    # over `days`. `lifetime` means no expiry.
+    duration: int = Field(default=0, ge=0, le=100000)
+    unit: str = Field(default="")
     max_activations: int = Field(default=1, ge=1, le=100)
+
+    @field_validator("unit")
+    @classmethod
+    def _unit(cls, v: str) -> str:
+        v = v.lower().strip()
+        allowed = {"", "minutes", "hours", "days", "weeks", "months", "years", "lifetime"}
+        if v not in allowed:
+            raise ValueError("unit must be minutes|hours|days|weeks|months|years|lifetime")
+        return v
 
 
 class LicenseBulkCreate(LicenseCreate):

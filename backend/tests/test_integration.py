@@ -158,6 +158,56 @@ async def test_list_licenses(client, auth_headers, app_with_secret, license_key)
     assert license_key in keys
 
 
+async def test_generate_duration_units(client, auth_headers, app_with_secret):
+    from datetime import datetime, timedelta, timezone
+
+    cases = [
+        {"duration": 90, "unit": "minutes"},
+        {"duration": 6, "unit": "hours"},
+        {"duration": 14, "unit": "weeks"},
+        {"duration": 3, "unit": "months"},
+        {"duration": 2, "unit": "years"},
+        {"duration": 0, "unit": "lifetime"},
+    ]
+    for payload in cases:
+        r = await client.post(
+            f"/api/v1/admin/licenses/for/{app_with_secret['id']}",
+            json={**payload, "count": 1, "max_activations": 1},
+            headers=auth_headers,
+        )
+        assert r.status_code == 201, (payload, r.text)
+        lic = r.json()[0]
+        if payload["unit"] == "lifetime":
+            assert lic["expires_at"] is None
+        else:
+            assert lic["expires_at"] is not None
+            exp = datetime.fromisoformat(lic["expires_at"].replace("Z", "+00:00"))
+            if exp.tzinfo is None:
+                exp = exp.replace(tzinfo=timezone.utc)
+            assert exp > datetime.now(timezone.utc)
+
+    # legacy `days` still works
+    r = await client.post(
+        f"/api/v1/admin/licenses/for/{app_with_secret['id']}",
+        json={"days": 30, "count": 1, "max_activations": 1},
+        headers=auth_headers,
+    )
+    assert r.status_code == 201, r.text
+    exp = datetime.fromisoformat(r.json()[0]["expires_at"].replace("Z", "+00:00"))
+    if exp.tzinfo is None:
+        exp = exp.replace(tzinfo=timezone.utc)
+    assert exp > datetime.now(timezone.utc)
+
+
+async def test_generate_duration_requires_positive(client, auth_headers, app_with_secret):
+    r = await client.post(
+        f"/api/v1/admin/licenses/for/{app_with_secret['id']}",
+        json={"duration": 0, "unit": "days", "count": 1, "max_activations": 1},
+        headers=auth_headers,
+    )
+    assert r.status_code == 400
+
+
 # ------------------------------------------------------------------ client auth flow
 async def test_activate_verify_deactivate(client, app_creds, license_key):
     hwid = "machine-abc-12345"

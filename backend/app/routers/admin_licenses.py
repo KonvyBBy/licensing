@@ -18,6 +18,40 @@ def _client_ip(request: Request) -> str:
     return request.client.host if request.client else ""
 
 
+def _add_calendar_months(dt: datetime, months: int) -> datetime:
+    """Add whole calendar months, clamping the day to the target month's end."""
+    idx = dt.month - 1 + months
+    year = dt.year + idx // 12
+    month = idx % 12 + 1
+    leap = year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
+    days_in_month = [31, 29 if leap else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1]
+    return dt.replace(year=year, month=month, day=min(dt.day, days_in_month))
+
+
+def _compute_expiry(payload: LicenseBulkCreate, now: datetime) -> datetime | None:
+    """Return the expiry (or None for lifetime) for a license-create payload."""
+    unit = payload.unit
+    if unit == "lifetime":
+        return None
+    if unit:
+        if payload.duration <= 0:
+            raise HTTPException(400, "duration must be greater than 0")
+        if unit == "minutes":
+            return now + timedelta(minutes=payload.duration)
+        if unit == "hours":
+            return now + timedelta(hours=payload.duration)
+        if unit == "days":
+            return now + timedelta(days=payload.duration)
+        if unit == "weeks":
+            return now + timedelta(weeks=payload.duration)
+        if unit == "months":
+            return _add_calendar_months(now, payload.duration)
+        if unit == "years":
+            return _add_calendar_months(now, payload.duration * 12)
+    # Legacy `days` path (0 = lifetime).
+    return now + timedelta(days=payload.days) if payload.days and payload.days > 0 else None
+
+
 def _license_out(lic: License) -> LicenseOut:
     return LicenseOut(
         id=lic.id,
@@ -52,7 +86,7 @@ async def generate_for_app(
     await _app_for_admin(db, admin, app_id)
 
     now = datetime.now(timezone.utc)
-    expiry = now + timedelta(days=payload.days) if payload.days and payload.days > 0 else None
+    expiry = _compute_expiry(payload, now)
 
     created = []
     seen = set()
@@ -78,7 +112,12 @@ async def generate_for_app(
     await audit(
         db, actor_type="admin", actor_id=admin.id, action="license.generate",
         target=app_id, ip=_client_ip(request),
-        details={"count": len(created), "days": payload.days, "max_activations": payload.max_activations},
+        details={
+            "count": len(created),
+            "unit": payload.unit or ("days" if payload.days else "lifetime"),
+            "duration": payload.duration or payload.days or 0,
+            "max_activations": payload.max_activations,
+        },
     )
     await db.commit()
     for lic in created:
