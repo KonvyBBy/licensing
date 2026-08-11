@@ -641,6 +641,136 @@ curl -X POST "${"${api}"}/auth/verify" \\
 curl -X POST "${"${api}"}/auth/deactivate" \\
   -H "Content-Type: application/json" \\
   -d '{"app_id":"${"${appId}"}","session_token":"<session_token>"}'`,
+  c: `/* C / C++ with libcurl. Build:  gcc app.c -o app -lcurl
+   Pinning: set CURLOPT_CAINFO to a PEM bundle of YOUR server's CA.   */
+#include <curl/curl.h>
+#include <stdio.h>
+#include <string.h>
+
+static size_t on_body(void *p, size_t s, size_t n, void *o){
+  size_t t = s * n;
+  char *out = (char*)o;
+  size_t have = strlen(out);
+  memcpy(out + have, p, t);
+  out[have + t] = '\0';
+  return t;
+}
+
+static int post_json(const char *path, const char *json,
+                     char *out, size_t outsz, long *code){
+  char url[512];
+  snprintf(url, sizeof url, "%s%s", "${"${api}"}", path);
+  CURL *c = curl_easy_init();
+  out[0] = '\0';
+  curl_easy_setopt(c, CURLOPT_URL, url);
+  curl_easy_setopt(c, CURLOPT_POST, 1L);
+  curl_easy_setopt(c, CURLOPT_COPYPOSTFIELDS, json);
+  curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, on_body);
+  curl_easy_setopt(c, CURLOPT_WRITEDATA, out);
+  /* curl_easy_setopt(c, CURLOPT_CAINFO, "server.pem");  // pin your cert */
+  CURLcode rc = curl_easy_perform(c);
+  curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, code);
+  curl_easy_cleanup(c);
+  return rc == CURLE_OK ? 0 : -1;
+}
+
+void activate(const char *key, const char *hwid){
+  char json[512], out[1024]; long code = 0;
+  snprintf(json, sizeof json,
+    "{\\"app_id\\":\\"${"${appId}"}\\",\\"app_secret\\":\\"${"${secret}"}\\","
+    "\\"key\\":\\"%s\\",\\"hwid\\":\\"%s\\"}", key, hwid);
+  if (post_json("/auth/activate", json, out, sizeof out, &code) == 0 && code == 200)
+    printf("session_token: %s\n", out);  /* parse JSON, store token */
+}`,
+  csharp: `using System;
+using System.Net.Http;
+using System.Text.Json;
+using System.Threading.Tasks;
+
+var http = new HttpClient { BaseAddress = new Uri("${"${base}"}") };
+
+async Task<string> ActivateAsync(string key, string hwid) {
+    var resp = await http.PostAsJsonAsync("/api/v1/auth/activate", new {
+        app_id = "${"${appId}"}", app_secret = "${"${secret}"}",
+        key = key, hwid = hwid
+    });
+    using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+    return doc.RootElement.GetProperty("session_token").GetString();
+}
+
+// Verify (token ROTATES each call) ------------------------------------
+async Task<string> VerifyAsync(string sessionToken) {
+    var resp = await http.PostAsJsonAsync("/api/v1/auth/verify", new {
+        app_id = "${"${appId}"}", session_token = sessionToken
+    });
+    using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+    return doc.RootElement.GetProperty("session_token").GetString();
+}
+
+// Deactivate ----------------------------------------------------------
+async Task DeactivateAsync(string sessionToken) {
+    await http.PostAsJsonAsync("/api/v1/auth/deactivate", new {
+        app_id = "${"${appId}"}", session_token = sessionToken
+    });
+}`,
+  java: `import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+
+String API = "${"${api}"}";
+String APP_ID = "${"${appId}"}";
+String APP_SECRET = "${"${secret}"}";
+
+static String post(String path, String json) throws Exception {
+    HttpRequest req = HttpRequest.newBuilder(URI.create(API + path))
+        .header("Content-Type", "application/json")
+        .POST(HttpRequest.BodyPublishers.ofString(json)).build();
+    return HttpClient.newHttpClient()
+        .send(req, HttpResponse.BodyHandlers.ofString()).body();
+}
+
+// Activate -> parse JSON, take "session_token"
+String activate = post("/auth/activate", String.format(
+    "{\\"app_id\\":\\"%s\\",\\"app_secret\\":\\"%s\\",\\"key\\":\\"%s\\",\\"hwid\\":\\"%s\\"}",
+    APP_ID, APP_SECRET, "KEY", "HWID"));
+
+// Verify (rotates the token) -> use returned "session_token" next time
+String verify = post("/auth/verify", String.format(
+    "{\\"app_id\\":\\"%s\\",\\"session_token\\":\\"%s\\"}", APP_ID, sessionToken));`,
+  go: `package main
+
+import (
+    "bytes"
+    "encoding/json"
+    "fmt"
+    "net/http"
+)
+
+const (
+    api      = "${"${api}"}"
+    appID    = "${"${appId}"}"
+    appSec   = "${"${secret}"}"
+)
+
+func post(path string, body map[string]string) (string, int) {
+    b, _ := json.Marshal(body)
+    resp, err := http.Post(api+path, "application/json", bytes.NewReader(b))
+    if err != nil { panic(err) }
+    defer resp.Body.Close()
+    var out map[string]any
+    json.NewDecoder(resp.Body).Decode(&out)
+    token, _ := out["session_token"].(string)
+    return token, resp.StatusCode
+}
+
+func activate(key, hwid string) string {
+    token, code := post("/auth/activate", map[string]string{
+        "app_id": appID, "app_secret": appSec, "key": key, "hwid": hwid,
+    })
+    if code != 200 { fmt.Println("activate failed:", code) }
+    return token   // store; send to verify on next launch
+}`,
   js: `const API = "${"${api}"}";
 const APP_ID = "${"${appId}"}";
 const APP_SECRET = "${"${secret}"}";
@@ -667,6 +797,33 @@ async function verify(sessionToken) {
   if (!r.ok) throw new Error(d.detail);
   return d.session_token;              // use the returned token next time
 }`,
+  http_api: `BASE_URL   = ${"${base}"}
+
+ACTIVATE    POST /api/v1/auth/activate
+  body   { "app_id": APP_ID, "app_secret": APP_SECRET, "key": KEY, "hwid": HWID }
+  200    { "ok": true, "session_token": "...", "expires_in": 86400, "expires_at": "..." }
+  400    malformed key         401  bad app credentials
+  403    banned / expired / max-activations / hwid-mismatch
+  404    unknown key           429  rate limited (10/min/IP)
+
+VERIFY      POST /api/v1/auth/verify        <- token ROTATES every call
+  body   { "app_id": APP_ID, "session_token": TOKEN }
+  200    { ..., "license_key": "KEY" }
+  401    session expired / revoked / rotated
+  403    key revoked, banned or expired
+
+DEACTIVATE  POST /api/v1/auth/deactivate
+  body   { "app_id": APP_ID, "session_token": TOKEN }
+  204    ok       404   session already gone
+
+RULES
+  - Keys: XXXXX-XXXXX-XXXXX-XXXXX-XXXXX (uppercase)
+  - hwid: any stable string >= 8 chars; server hashes it, never stores raw
+  - First activation binds the HWID; a second device gets 403
+  - session_token rotates on every verify: always store the returned one
+  - app_secret lives only in YOUR app; it can be extracted by reversers but
+    grants no ability to mint or validate licenses
+  - Identical protocol from Python, C/C++, C#, Java, Go, Rust, JS, ...`,
   hwid: `import hashlib, platform, uuid
 
 def my_hwid():
@@ -675,7 +832,8 @@ def my_hwid():
     return hashlib.sha256(raw.encode()).hexdigest()
 
 # HWID requirements: at least 8 chars, never stored raw server-side
-# (it is hashed with your SECRET_KEY before touching the database).`,
+# (it is hashed with your SECRET_KEY before touching the database).
+// C++/C# equivalent: hash MAC address + machine name with SHA-256.`,
 };
 
 function fillSnippet(tpl) {
@@ -698,6 +856,12 @@ function highlight(code) {
     .replace(/(\$\{|\}|\d+\.\d+)/g, (m) => `<span class="n">${m}</span>`);
 }
 
+const LANG_LABELS = {
+  python_sdk: "Python · SDK", python_http: "Python · HTTP", curl: "cURL",
+  js: "JavaScript", c: "C / C++", csharp: "C#", java: "Java", go: "Go",
+  http_api: "API Reference", hwid: "HWID helper",
+};
+
 async function renderSnippets() {
   const d = currentDev();
   const body = $("dev-body");
@@ -708,11 +872,7 @@ async function renderSnippets() {
   body.innerHTML = `
     <div class="row" style="margin-top:14px">
       <div class="seg" id="dev-tabs">
-        <button data-lang="python_sdk" class="active">Python · SDK</button>
-        <button data-lang="python_http">Python · HTTP</button>
-        <button data-lang="curl">cURL</button>
-        <button data-lang="js">JavaScript</button>
-        <button data-lang="hwid">HWID helper</button>
+        ${Object.entries(LANG_LABELS).map(([k, l]) => `<button data-lang="${k}"${k === "python_sdk" ? ' class="active"' : ""}>${l}</button>`).join("")}
       </div>
     </div>
     <div class="row" style="margin-top:12px">
@@ -750,7 +910,7 @@ function showSnippet(lang) {
   const el = $("dev-snippet");
   if (!el) return;
   el.innerHTML = `
-    <div class="code-head"><span class="lang">${esc(lang.toUpperCase().replace("_", " · "))}</span>
+    <div class="code-head"><span class="lang">${esc(LANG_LABELS[lang] || lang.toUpperCase())}</span>
       <button class="ghost small" onclick="copyText(document.getElementById('dev-code').innerText)">Copy</button></div>
     <pre id="dev-code">${highlight(filled)}</pre>`;
 }
